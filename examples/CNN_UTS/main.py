@@ -420,7 +420,7 @@ def train(cfg):
         np.array_equal(all_test_labels[0], labels) for labels in all_test_labels[1:]
     )
     if labels_consistent:
-        print("  ✅ Test set labels are consistent across all folds")
+        print("  [OK] Test set labels are consistent across all folds")
     else:
         print(
             "  [WARNING] Test set labels are inconsistent across folds, which may degrade ensemble performance"
@@ -435,9 +435,9 @@ def train(cfg):
     ensemble_median_r2 = r2_score(true_labels_test, ensemble_median_preds)
 
     print("\nEnsemble prediction performance metrics:")
-    print(f"  Mean ensemble - MSE: {ensemble_mean_mse:.4f}, R²: {ensemble_mean_r2:.4f}")
+    print(f"  Mean ensemble - MSE: {ensemble_mean_mse:.4f}, R2: {ensemble_mean_r2:.4f}")
     print(
-        f"  Median ensemble - MSE: {ensemble_median_mse:.4f}, R²: {ensemble_median_r2:.4f}"
+        f"  Median ensemble - MSE: {ensemble_median_mse:.4f}, R2: {ensemble_median_r2:.4f}"
     )
 
     # Calculate performance for each fold
@@ -446,55 +446,55 @@ def train(cfg):
         fold_mse = mean_squared_error(true_labels_test, test_preds_history[i])
         fold_r2 = r2_score(true_labels_test, test_preds_history[i])
         fold_performances.append((fold_mse, fold_r2))
-        print(f"  Fold {i+1} - MSE: {fold_mse:.4f}, R²: {fold_r2:.4f}")
+        print(f"  Fold {i+1} - MSE: {fold_mse:.4f}, R2: {fold_r2:.4f}")
 
     # Calculate average performance of single folds
     single_fold_mse = np.mean([perf[0] for perf in fold_performances])
     single_fold_r2 = np.mean([perf[1] for perf in fold_performances])
     print(
-        f"  Average single fold - MSE: {single_fold_mse:.4f}, R²: {single_fold_r2:.4f}"
+        f"  Average single fold - MSE: {single_fold_mse:.4f}, R2: {single_fold_r2:.4f}"
     )
 
     # Find best single fold performance
     best_fold_idx = np.argmax([perf[1] for perf in fold_performances])
     best_fold_r2 = fold_performances[best_fold_idx][1]
-    print(f"  Best single fold (Fold {best_fold_idx+1}) - R²: {best_fold_r2:.4f}")
+    print(f"  Best single fold (Fold {best_fold_idx+1}) - R2: {best_fold_r2:.4f}")
 
     # Check if ensemble learning is effective
     print("\nEnsemble learning effectiveness analysis:")
     if ensemble_mean_r2 > single_fold_r2:
         print(
-            f"  [OK] Mean ensemble is effective! Improved R² by {ensemble_mean_r2 - single_fold_r2:.4f} compared to average single fold"
+            f"  [OK] Mean ensemble is effective! Improved R2 by {ensemble_mean_r2 - single_fold_r2:.4f} compared to average single fold"
         )
     else:
         print(
-            f"  [WARNING] Mean ensemble has no obvious effect, R² is {single_fold_r2 - ensemble_mean_r2:.4f} lower than average single fold"
+            f"  [WARNING] Mean ensemble has no obvious effect, R2 is {single_fold_r2 - ensemble_mean_r2:.4f} lower than average single fold"
         )
 
     if ensemble_mean_r2 > best_fold_r2:
         print(
-            f"  [OK] Mean ensemble is effective! Improved R² by {ensemble_mean_r2 - best_fold_r2:.4f} compared to best single fold"
+            f"  [OK] Mean ensemble is effective! Improved R2 by {ensemble_mean_r2 - best_fold_r2:.4f} compared to best single fold"
         )
     else:
         print(
-            f"  [WARNING] Mean ensemble is worse than best single fold, R² is {best_fold_r2 - ensemble_mean_r2:.4f} lower"
+            f"  [WARNING] Mean ensemble is worse than best single fold, R2 is {best_fold_r2 - ensemble_mean_r2:.4f} lower"
         )
 
     # Try weighted ensemble
     print("\nTrying weighted ensemble...")
     # Calculate weights based on each fold's performance
-    fold_weights = np.array([perf[1] for perf in fold_performances])  # Use R² as weight
+    fold_weights = np.array([perf[1] for perf in fold_performances])  # Use R2 as weight
     fold_weights = fold_weights / np.sum(fold_weights)  # Normalization
     print(f"  Fold weights: {fold_weights}")
 
     weighted_preds = np.average(test_preds_history, axis=0, weights=fold_weights)
     weighted_mse = mean_squared_error(true_labels_test, weighted_preds)
     weighted_r2 = r2_score(true_labels_test, weighted_preds)
-    print(f"  Weighted ensemble - MSE: {weighted_mse:.4f}, R²: {weighted_r2:.4f}")
+    print(f"  Weighted ensemble - MSE: {weighted_mse:.4f}, R2: {weighted_r2:.4f}")
 
     if weighted_r2 > ensemble_mean_r2:
         print(
-            f"  [OK] Weighted ensemble improved R² by {weighted_r2 - ensemble_mean_r2:.4f} compared to simple mean ensemble"
+            f"  [OK] Weighted ensemble improved R2 by {weighted_r2 - ensemble_mean_r2:.4f} compared to simple mean ensemble"
         )
         # Save weighted ensemble results
         np.save(
@@ -527,7 +527,16 @@ def train(cfg):
 
     # 2. Ensemble prediction violin plot
     plt.figure(figsize=(10, 6))
-    data_to_plot = [true_labels_test, ensemble_mean_preds]
+    # Ensure data is 1D for violin plot
+    true_labels_flat = (
+        true_labels_test.flatten() if true_labels_test.ndim > 1 else true_labels_test
+    )
+    ensemble_preds_flat = (
+        ensemble_mean_preds.flatten()
+        if ensemble_mean_preds.ndim > 1
+        else ensemble_mean_preds
+    )
+    data_to_plot = [true_labels_flat, ensemble_preds_flat]
     plt.violinplot(data_to_plot, positions=[1, 2], showmeans=True, showmedians=True)
     plt.xticks([1, 2], ["True Values", "Predicted Values"])
     plt.ylabel("Values")
@@ -566,7 +575,10 @@ def train(cfg):
 
         # 4. Violin plot for each fold
         plt.figure(figsize=(10, 6))
-        data_to_plot = [fold_true, fold_preds]
+        # Ensure data is 1D for violin plot
+        fold_true_flat = fold_true.flatten() if fold_true.ndim > 1 else fold_true
+        fold_preds_flat = fold_preds.flatten() if fold_preds.ndim > 1 else fold_preds
+        data_to_plot = [fold_true_flat, fold_preds_flat]
         plt.violinplot(data_to_plot, positions=[1, 2], showmeans=True, showmedians=True)
         plt.xticks([1, 2], ["True Values", "Predicted Values"])
         plt.ylabel("Values")
