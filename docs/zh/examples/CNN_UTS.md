@@ -76,27 +76,36 @@ CNN_UTS/
 
 数据集下载链接:<https://paddle-org.bj.bcebos.com/paddlescience/datasets/CNN_UTS/Dataset.zip>
 
-| Image Name         | ...特征列... | UTS (MPa) | ... |
-|--------------------|--------------|-----------|-----|
-| IPP_10__40060.jpg  | ...          | 0.56      | ... |
-| ...                | ...          | ...       | ... |
-
 本案例使用的数据集包含材料微观结构图像和对应的拉伸强度标签。数据集分为以下几个部分：
 
-1. 训练集：`Dataset/Train_val/`
-2. 测试集：`Dataset/Test/`
+1. **训练集**：`Dataset/Train_val/` - 包含2600张图像和对应的CSV标签文件
+2. **测试集**：`Dataset/Test/` - 包含500张图像和对应的CSV标签文件
 
-数据集结构如下：
-
+**数据集特点**：
 - 每个样本包含RGB图像和对应的UTS标签
 - 图像经过预处理，统一调整为224×224尺寸
 - 使用ImageNet预训练权重的标准化参数进行归一化
+- UTS值范围：0.46 - 3.9 MPa，平均值为1.924 MPa，标准差为1.154 MPa
+
+**数据格式示例**：
+```
+Dataset/
+├── Train_val/
+│   ├── IPP_10__40060.jpg
+│   ├── IPP_15__10_1.19_1.057_1.1697.jpg
+│   └── samples.csv
+└── Test/
+    ├── IPP_15__10_1.19_1.057_1.1697/
+    │   ├── *.jpg (100张图像)
+    │   └── *.csv (标签文件)
+    └── ...
+```
 
 为了方便数据处理，我们使用了 `make_dataset` 函数来创建数据集：
 
-``` py linenums="73" title="examples/CNN_UTS/main.py"
+``` py linenums="77" title="examples/CNN_UTS/main.py"
 --8<--
-examples/CNN_UTS/main.py:73:74
+examples/CNN_UTS/main.py:77:78
 --8<--
 ```
 
@@ -111,9 +120,9 @@ examples/CNN_UTS/main.py:73:74
 
 模型定义代码如下：
 
-``` py linenums="112" title="examples/CNN_UTS/main.py"
+``` py linenums="116" title="examples/CNN_UTS/main.py"
 --8<--
-examples/CNN_UTS/main.py:112:115
+examples/CNN_UTS/main.py:116:119
 --8<--
 ```
 
@@ -128,25 +137,89 @@ examples/CNN_UTS/main.py:112:115
 
 数据增强配置如下：
 
-``` py linenums="53" title="examples/CNN_UTS/main.py"
+``` py linenums="58" title="examples/CNN_UTS/main.py"
 --8<--
-examples/CNN_UTS/main.py:53:70
+examples/CNN_UTS/main.py:58:74
 --8<--
 ```
 
 ### 3.4 训练策略
 
-本案例采用5折交叉验证策略进行模型训练：
+本案例采用5折交叉验证策略进行模型训练，具体流程如下：
 
-1. 将训练数据分为5个fold
-2. 每个fold训练一个独立的模型
-3. 最终使用所有fold的预测结果进行集成
+#### 3.4.1 5折交叉验证流程
 
-训练过程包括：
+1. **数据分割**：将训练数据按样本ID进行分层分组，确保同一样本的所有图像在同一fold中
+2. **模型训练**：每个fold训练一个独立的ResNet-18模型
+3. **模型保存**：保存每个fold的最佳模型权重
+4. **集成预测**：使用所有fold的预测结果进行集成
 
-``` py linenums="85" title="examples/CNN_UTS/main.py"
+#### 3.4.2 预训练模型权重的使用
+
+**ImageNet预训练权重的加载**：
+```python
+model = paddle.vision.models.resnet18(pretrained=True)
+```
+- 在模型初始化时自动加载ImageNet预训练权重
+- 这些权重提供了强大的特征提取能力
+- 适用于图像分类任务，为UTS回归任务提供良好的初始化
+
+**模型适配**：
+```python
+model.fc = paddle.nn.Linear(model.fc.weight.shape[0], 1)
+```
+- 将最后的全连接层从1000个输出（ImageNet类别数）改为1个输出（UTS回归值）
+- 保持预训练的特征提取层不变
+- 只训练新添加的回归层
+
+#### 3.4.3 训练过程
+
+每个fold的训练过程包括：
+
+1. **数据加载**：使用StratifiedGroupKFold进行数据分割
+2. **模型初始化**：加载ImageNet预训练权重并适配回归任务
+3. **训练循环**：
+   - 前向传播：图像 → ResNet-18 → UTS预测值
+   - 损失计算：MSE损失
+   - 反向传播：Adam优化器更新参数
+   - 验证评估：在验证集上评估性能
+4. **模型保存**：保存验证损失最低的模型权重
+
+#### 3.4.4 预训练模型权重的使用步骤
+
+**训练阶段**：
+1. **模型初始化**：每个fold开始时，使用 `paddle.vision.models.resnet18(pretrained=True)` 加载ImageNet预训练权重
+2. **模型适配**：修改最后一层为回归层 `model.fc = paddle.nn.Linear(model.fc.weight.shape[0], 1)`
+3. **训练过程**：在训练过程中，预训练的特征提取层会进行微调，新的回归层从头开始训练
+4. **模型保存**：每个fold训练完成后，保存最佳模型权重到 `resnet18-v5-fold{fold_number}.pdparams`
+
+**评估阶段**：
+1. **模型加载**：使用 `paddle.load()` 加载对应fold的预训练权重
+2. **模型恢复**：将权重加载到相同结构的模型中
+3. **推理预测**：使用加载的模型进行预测
+
+**预训练权重文件说明**：
+- `resnet18-v5-fold1.pdparams`：第1折的最佳模型权重
+- `resnet18-v5-fold2.pdparams`：第2折的最佳模型权重
+- `resnet18-v5-fold3.pdparams`：第3折的最佳模型权重
+- `resnet18-v5-fold4.pdparams`：第4折的最佳模型权重
+- `resnet18-v5-fold5.pdparams`：第5折的最佳模型权重
+
+**训练配置**：
+- 训练轮数：可配置（默认值）
+- 批次大小：可配置（默认32）
+- 学习率：可配置（默认值）
+- 优化器：Adam
+- 损失函数：MSE Loss
+
+**训练监控**：
+- 每个epoch记录训练损失、验证损失和测试损失
+- 当验证损失达到新低时，自动保存模型权重
+- 支持GPU内存不足时的自动处理机制
+
+``` py linenums="89" title="examples/CNN_UTS/main.py"
 --8<--
-examples/CNN_UTS/main.py:85:98
+examples/CNN_UTS/main.py:89:102
 --8<--
 ```
 
@@ -154,17 +227,17 @@ examples/CNN_UTS/main.py:85:98
 
 使用均方误差损失函数进行回归任务：
 
-``` py linenums="116" title="examples/CNN_UTS/main.py"
+``` py linenums="120" title="examples/CNN_UTS/main.py"
 --8<--
-examples/CNN_UTS/main.py:116:116
+examples/CNN_UTS/main.py:120:120
 --8<--
 ```
 
 使用Adam优化器进行参数更新：
 
-``` py linenums="117" title="examples/CNN_UTS/main.py"
+``` py linenums="121" title="examples/CNN_UTS/main.py"
 --8<--
-examples/CNN_UTS/main.py:117:119
+examples/CNN_UTS/main.py:121:123
 --8<--
 ```
 
@@ -178,13 +251,52 @@ examples/CNN_UTS/main.py:117:119
 
 评估器构建代码如下：
 
-``` py linenums="156" title="examples/CNN_UTS/main.py"
+``` py linenums="162" title="examples/CNN_UTS/main.py"
 --8<--
-examples/CNN_UTS/main.py:156:188
+examples/CNN_UTS/main.py:162:194
 --8<--
 ```
 
-## 4. 完整代码
+## 4. 训练结果与性能指标
+
+### 4.1 数据集统计
+
+- **训练集样本数**：2600张图像
+- **测试集样本数**：500张图像
+- **UTS值范围**：0.46 - 3.9 MPa
+- **UTS平均值**：1.924 MPa
+- **UTS标准差**：1.154 MPa
+
+### 4.2 单模型性能（5折交叉验证）
+
+| Fold | MSE | R² | 说明 |
+|------|-----|----|----|
+| Fold 1 | 0.2202 | 0.8347 | 良好性能 |
+| Fold 2 | 0.1275 | 0.9043 | 优秀性能 |
+| Fold 3 | 0.1209 | 0.9092 | **最佳性能** |
+| Fold 4 | 0.2716 | 0.7961 | 相对较低 |
+| Fold 5 | 0.2154 | 0.8383 | 良好性能 |
+
+**统计结果**：
+- **平均MSE**：0.1911 ± 0.0581
+- **平均R²**：0.8565 ± 0.0436
+- **最佳R²**：0.9092 (Fold 3)
+- **最差R²**：0.7961 (Fold 4)
+
+### 4.3 集成学习性能
+
+| 方法 | MSE | R² | 说明 |
+|------|-----|----|----|
+| **均值集成** | 0.1052 | 0.9210 | 推荐使用 |
+| **中位数集成** | 0.0928 | 0.9303 | **最佳性能** |
+| **单模型平均** | 0.1911 | 0.8565 | 基准对比 |
+
+**集成学习效果分析**：
+- 中位数集成相比单模型平均提升了 **7.4%** 的R²
+- 均值集成相比单模型平均提升了 **6.4%** 的R²
+- 集成学习显著提高了模型的稳定性和预测精度
+
+## 5. 完整代码
 
 ``` py linenums="1" title="examples/CNN_UTS/main.py"
 --8<--
